@@ -2,16 +2,14 @@ import asyncio
 import logging
 import sys
 import json
-from email.policy import default
-from multiprocessing.managers import State
-from pickle import FRAME
+import cohere
 
 from aiogram import Bot, Dispatcher, html
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery, URLInputFile, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.types import Message, CallbackQuery, URLInputFile, ReplyKeyboardRemove
 from models import Book
 from conf import BOT_TOKEN, ADMIN_ID
 from commands import (START_BOT_COMMAND, BOOKS_BOT_COMMAND, BOOKS_CREATED_COMMAND,
@@ -20,10 +18,8 @@ from keyboards import books_keyboard_markup, BookCallback
 from state import BookForm
 
 TOKEN = BOT_TOKEN
-
-# All handlers should be attached to the Router (or Dispatcher)
-
 dp = Dispatcher()
+
 
 @dp.message(Command('/pop'))
 async def info(message: Message) -> None:
@@ -32,33 +28,16 @@ async def info(message: Message) -> None:
 
 @dp.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
-    """
-    This handler receives messages with `/start` command
-    """
-    # Most event objects have aliases for API methods that can be called in events' context
-    # For example if you want to answer to incoming message you can use `message.answer(...)` alias
-    # and the target chat will be passed to :ref:`aiogram.methods.send_message.SendMessage`
-    # method automatically or call API method directly via
-    # Bot instance: `bot.send_message(chat_id=message.chat.id, ...)`
     await message.answer(f"Hello, {html.bold(message.from_user.full_name)}!")
-
     logging.info(f'{message.from_user.full_name} has started')
 
-
-@dp.message(BOOKS_COMMAND)
-async def books(message:Message)->None:
-    data = get_books()
-    markup = books_keyboard_markup(book_list=data)
-    await message.answer(f"Список книг. Нажміть на кнопку",
-                            reply_markup=markup)
 
 def get_books(file_path: str = 'data.json', book_id: int | None = None):
     with open(file_path, 'r', encoding='utf-8') as fp:
         books = json.load(fp)
-        if book_id != None and book_id < len(books):
+        if book_id is not None and book_id < len(books):
             return books[book_id]
         return books
-
 
 
 def add_books(book: dict, file_path: str = 'data.json'):
@@ -69,54 +48,54 @@ def add_books(book: dict, file_path: str = 'data.json'):
             json.dump(
                 books,
                 fp,
-                indient=4,
+                indent=4,
                 ensure_ascii=False
             )
 
 
+@dp.message(BOOKS_COMMAND)
+async def books(message: Message) -> None:
+    data = get_books()
+    markup = books_keyboard_markup(book_list=data)
+    await message.answer("Список книг. Нажміть на кнопку", reply_markup=markup)
 
 
 @dp.callback_query(BookCallback.filter())
 async def callback_book(callback: CallbackQuery, callback_data: BookCallback) -> None:
-    print(callback)
-    print()
-    print(callback_data)
     book_id = callback_data.id
     book_data = get_books(book_id=book_id)
     book = Book(**book_data)
 
-    text = f"Книга: {
-book.name
-}\n" \
-           f"Опис: {book.description}\n" \
-           f"Рейтинг: {book.rating}\n" \
-           f"Жанр: {book.genre}\n" \
-           f"Автори: {', '.join(book.authors)}\n"
+    text = (
+        f"Книга: {book.name}\n"
+        f"Опис: {book.description}\n"
+        f"Рейтинг: {book.rating}\n"
+        f"Жанр: {book.genre}\n"
+        f"Автори: {', '.join(book.authors)}\n"
+    )
 
     try:
         await callback.message.answer_photo(
             caption=text,
             photo=URLInputFile(
                 book.poster,
-                filename=f"{
-book.name
-}_cover.{book.poster.split('.')[-1]}"
+                filename=f"{book.name}_cover.{book.poster.split('.')[-1]}"
             )
         )
     except Exception as e:
         await callback.message.answer(text)
-        logging.error(f"Failed to load images for book{
-book.name
-}: {str(e)}")
+        logging.error(f"Failed to load images for book {book.name}: {str(e)}")
 
 
 @dp.message(BOOKS_CREATED_COMMAND)
 async def book_create(message: Message, state: FSMContext) -> None:
-    if message.from_user.id == int(ADMIN_ID)
+    if message.from_user.id == int(ADMIN_ID):
         await state.set_state(BookForm.name)
         await message.answer("Введіть назву книги", reply_markup=ReplyKeyboardRemove())
-    else
+    else:
         await message.answer("тільки для адміна", reply_markup=ReplyKeyboardRemove())
+
+
 @dp.message(BookForm.name)
 async def book_name(message: Message, state: FSMContext) -> None:
     await state.update_data(name=message.text)
@@ -159,42 +138,33 @@ async def book_poster(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
 
     book = Book(**data)
-    add_books(book)  # або add_books(book.dict()), залежно від реалізації
+    add_books(book.dict())
 
     await state.clear()
-    await message.answer(f"Книгу «{book.name}» успішно додано ", reply_markup=ReplyKeyboardRemove())
+    await message.answer(f"Книгу «{book.name}» успішно додано", reply_markup=ReplyKeyboardRemove())
 
 
+def generate_text(prompt: str):
+    co = cohere.ClientV2(api_key="Ualsm3uh6PTjQfLNiwzqIwS48urgKfPA0cwSfiZT")
 
-
-@dp.message(BOOKS_COMMAND)
-async def books(message:Message) -> None:
-    data = get_books()
-    markup = books_keyboard_markup(book_list=data)
-    await message.answer(f"Список книг. Нажміть на кнопку",
-                            reply_markup=markup)
-
-
+    res = co.chat(
+        model="command-a-03-2025",
+        messages=[
+            {"role": "user", "content": prompt}
+        ],
+    )
+    return res.message.content[0].text
 
 
 @dp.message()
 async def echo_handler(message: Message) -> None:
-    """
-    Handler will forward receive a message back to the sender
-    By default, message handler will handle all message types (like a text, photo, sticker etc.)
-    """
-    try:
-        books_list = get_books()
-        print(books_list)
-        # Send a copy of the received message
-        await message.answer(books_list, chat_id=message.chat.id)
-    except TypeError:
-        # But not all the types is supported to be copied so need to handle it
-        await message.answer("Nice try!")
+    user_input = message.text
+    await message.answer(f'{message.from_user.full_name}, зачекай... відповідь генерується...')
+    generated_text = generate_text(user_input)
+    await message.answer(generated_text)
 
 
 async def main() -> None:
-    # Initialize Bot instance with default bot properties which will be passed to all API calls
     bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     await bot.set_my_commands(
         [
@@ -203,7 +173,6 @@ async def main() -> None:
             BOOKS_BOT_CREATE_COMMAND
         ]
     )
-    # And the run events dispatching
     await dp.start_polling(bot)
 
 
